@@ -103,7 +103,21 @@ export const SENSITIVE_ACTIONS = [
   /** The public service mode (degraded, paused, maintenance) was changed or a change was refused. */
   "service_mode.changed",
   /** A service mode reached its `until` and returned to normal on its own. */
-  "service_mode.expired"
+  "service_mode.expired",
+  /** An ownership transfer proposal was initiated. */
+  "ownership.transfer.proposed",
+  /** An ownership transfer proposal was accepted. */
+  "ownership.transfer.accepted",
+  /** An ownership transfer proposal was cancelled. */
+  "ownership.transfer.cancelled",
+  /** An ownership transfer proposal was rejected. */
+  "ownership.transfer.rejected",
+  /** An ownership transfer proposal expired. */
+  "ownership.transfer.expired",
+  /** An ownership transfer proposal was swept as expired. */
+  "ownership.transfer.swept",
+  /** Incident recovery verification executed and passed or triggered rollback. */
+  "incident.recovery_verified"
 ] as const;
 
 export type AuditAction = (typeof SENSITIVE_ACTIONS)[number];
