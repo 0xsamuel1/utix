@@ -50,3 +50,28 @@ export interface WebhookDeliveryAttempt {
   retryCount: number;
   success: boolean;
 }
+
+export type ReplayWindowErrorCode =
+  | 'malformed_message'
+  | 'clock_skew_future'
+  | 'replay_window_expired'
+  | 'replay_attack_detected'
+  | 'signature_verification_failed'
+  | 'unauthorized_subscriber'
+  | 'inactive_subscriber'
+  | 'unauthorized_event';
+
+export interface ReplayWindowOptions {
+  now?: number;
+  subscriberId?: string;
+  expectedEvent?: string;
+  allowIdempotentRetry?: boolean;
+}
+
+export interface ReplayWindowVerificationResult {
+  valid: boolean;
+  code?: ReplayWindowErrorCode;
+  error?: string;
+  ageSeconds?: number;
+  deliveryAttempt?: number;
+}
