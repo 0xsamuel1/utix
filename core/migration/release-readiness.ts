@@ -9,6 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { checkMigrationPlan } from './plan-checks';
 import type {
   MigrationDefinition,
   MigrationPreviewReport,
@@ -49,6 +50,18 @@ export interface MigrationReleaseConfig<TInput = unknown, TOutput = unknown> {
   readonly maxRetries?: number;
   readonly initialBackoffMs?: number;
   readonly allowCriticalRisk?: boolean;
+  /**
+   * Deployed schema version (#339). When set, the plan is also checked as a
+   * whole: contiguous chain to `targetVersion`, rollback handlers for every
+   * migration above low risk, and rollback checks for high/critical ones.
+   * Omitted, the evaluation behaves exactly as before.
+   */
+  readonly currentVersion?: number;
+  /**
+   * Sample records to rehearse forward + rollback on (#339). Only used when
+   * `currentVersion` is set. Copied before use; the caller's data is untouched.
+   */
+  readonly rehearsalRecords?: readonly unknown[];
 }
 
 export interface ReadinessCheckResult {
@@ -258,6 +271,17 @@ export class MigrationReleaseReadinessVerifier {
         actor.userId || actor.role
       );
       evidenceList.push(evidence);
+    }
+
+    // 3b. Plan-level chain, reversibility and rehearsal checks (#339, opt-in)
+    if (config.currentVersion !== undefined) {
+      const plan = await checkMigrationPlan(config.migrations || [], {
+        currentVersion: config.currentVersion,
+        targetVersion: config.targetVersion,
+        rehearsalRecords: config.rehearsalRecords
+      });
+      checks.push(...plan.checks);
+      discrepancies.push(...plan.discrepancies);
     }
 
     // 4. Retry Path: Execute readiness probes (e.g. storage health, snapshot verification)
