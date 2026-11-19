@@ -62,7 +62,7 @@ describe('WebhookVerifier', () => {
     // Same nonce again should be rejected
     const result2 = webhookVerifier.verifySignature(message, testSecret);
     expect(result2.valid).toBe(false);
-    expect(result2.error).toContain('replay');
+    expect(result2.error?.toLowerCase()).toContain('replay');
   });
 
   it('should reject expired timestamps', () => {
