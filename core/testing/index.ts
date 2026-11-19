@@ -61,3 +61,13 @@ export {
   type RunAgainstProfilesOptions,
   type ProfileTestFactory
 } from "@/core/testing/runAgainstProfiles";
+export {
+  FailureInjectionEngine,
+  defaultFailureInjector,
+  type FaultType,
+  type FaultConfig,
+  type FaultTriggerCondition,
+  type FailureInjectionRule,
+  type FaultEvaluation,
+  type InjectedFailureRecord
+} from "@/core/testing/failure-injection";

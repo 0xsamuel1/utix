@@ -50,6 +50,7 @@
     "verify:issues-344-351": "node --loader ./scripts/loader.mjs scripts/verify-issues-344-351.mjs",
     "verify:issues-264-275": "node --loader ./scripts/loader.mjs scripts/verify-issues-264-275.mjs",
     "verify:issues-219-240": "node --loader ./scripts/loader.mjs scripts/verify-issues-219-240.mjs",
+    "verify:issues-354-357": "node --loader ./scripts/loader.mjs scripts/verify-issues-354-357.mjs",
     "backfill": "node --loader ./scripts/loader.mjs scripts/backfill.mjs"
   },
   "dependencies": {
