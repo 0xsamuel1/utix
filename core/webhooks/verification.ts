@@ -6,12 +6,18 @@ import {
   ReplayProtectionRecord,
   WebhookSubscriber,
   WebhookDeliveryAttempt,
+  ReplayWindowErrorCode,
+  ReplayWindowOptions,
+  ReplayWindowVerificationResult
 } from './types';
+import { err, ok, type Result } from '@/core/result/result';
 
 /** Upper bound on a message's serialized `data`, before any hashing happens. */
 export const MAX_WEBHOOK_DATA_LENGTH = 256 * 1024;
 /** Upper bound on a nonce; replay records are keyed by it. */
 export const MAX_WEBHOOK_NONCE_LENGTH = 128;
+/** Maximum nonces stored in-memory to prevent resource exhaustion attacks. */
+export const MAX_REPLAY_NONCES_CAPACITY = 50_000;
 
 const SUPPORTED_ALGORITHMS = ['sha256', 'sha512'];
 
@@ -51,6 +57,7 @@ export class WebhookVerifier {
   };
 
   private replayRecords: Map<string, ReplayProtectionRecord> = new Map();
+  private nonceQueue: Array<{ nonce: string; timestamp: number }> = [];
   private subscribers: Map<string, WebhookSubscriber> = new Map();
   private deliveryAttempts: DeliveryAttempt[] = [];
 
@@ -117,12 +124,18 @@ export class WebhookVerifier {
       return { valid: false, error: 'Replay attack detected: nonce already used' };
     }
 
-    // Verify cryptographic signature
+    // Verify cryptographic signature with constant-time equality check
     const payloadString = JSON.stringify(message.data);
     const signingString = `${signature.timestamp}.${signature.nonce}.${payloadString}`;
     const expectedSignature = this.generateSignature(signingString, secret, signature.algorithm);
 
-    if (signature.signature !== expectedSignature) {
+    const actualBuffer = Buffer.from(signature.signature, 'utf8');
+    const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+    if (
+      actualBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+    ) {
       return { valid: false, error: 'Signature verification failed' };
     }
 
@@ -138,6 +151,10 @@ export class WebhookVerifier {
     return this.replayRecords.has(nonce);
   }
 
+  /**
+   * Records a nonce and slides the replay window in O(1) amortized time.
+   * Space complexity: O(M) bounded to MAX_REPLAY_NONCES_CAPACITY.
+   */
   private recordNonce(nonce: string, timestamp: number, eventId: string): void {
     this.replayRecords.set(nonce, {
       nonce,
@@ -145,14 +162,201 @@ export class WebhookVerifier {
       eventId,
       verified: true,
     });
+    this.nonceQueue.push({ nonce, timestamp });
 
-    // Cleanup old records outside replay window
+    // O(1) amortized cleanup: pop expired records from front of queue
     const cutoff = Math.floor(Date.now() / 1000) - (this.config.replayWindowSeconds || 300);
-    for (const [key, record] of this.replayRecords) {
-      if (record.timestamp < cutoff) {
-        this.replayRecords.delete(key);
+    while (this.nonceQueue.length > 0 && this.nonceQueue[0].timestamp < cutoff) {
+      const expired = this.nonceQueue.shift()!;
+      this.replayRecords.delete(expired.nonce);
+    }
+
+    // Bounded capacity safeguard: discard oldest if capacity exceeded
+    while (this.nonceQueue.length > MAX_REPLAY_NONCES_CAPACITY) {
+      const oldest = this.nonceQueue.shift()!;
+      this.replayRecords.delete(oldest.nonce);
+    }
+  }
+
+  /**
+   * Explicit signed webhook replay-window enforcement (#355).
+   *
+   * Validates:
+   * 1. Message structure & size boundaries
+   * 2. Subscriber authorization and subscription status (if subscriberId provided)
+   * 3. Future clock skew boundaries (maxClockSkew)
+   * 4. Replay window freshness (replayWindowSeconds)
+   * 5. Nonce deduplication in bounded sliding window
+   * 6. Constant-time cryptographic HMAC verification
+   *
+   * Time complexity: O(1) amortized.
+   * Space complexity: O(1) auxiliary.
+   */
+  verifyReplayWindow(
+    message: WebhookMessage,
+    secret: string,
+    options: ReplayWindowOptions = {}
+  ): ReplayWindowVerificationResult {
+    // 1. Structure check
+    const malformed = malformedReason(message);
+    if (malformed) {
+      return {
+        valid: false,
+        code: 'malformed_message',
+        error: `Malformed webhook message: ${malformed}`
+      };
+    }
+
+    // 2. Subscriber authorization check (if specified)
+    if (options.subscriberId) {
+      const subAuth = this.verifySubscriberAuthorization(
+        options.subscriberId,
+        options.expectedEvent ?? message.event,
+        secret
+      );
+      if (!subAuth.ok) {
+        const codeMap: Record<string, ReplayWindowErrorCode> = {
+          subscriber_not_found: 'unauthorized_subscriber',
+          inactive_subscriber: 'inactive_subscriber',
+          unauthorized_event: 'unauthorized_event',
+          invalid_secret: 'signature_verification_failed'
+        };
+        return {
+          valid: false,
+          code: codeMap[subAuth.code] ?? 'unauthorized_subscriber',
+          error: `Subscriber authorization denied: ${subAuth.code}`
+        };
       }
     }
+
+    const { signature } = message;
+    const now = options.now ?? Math.floor(Date.now() / 1000);
+    const ageSeconds = now - signature.timestamp;
+
+    // 3. Clock skew check: rejects timestamps in future past maxClockSkew
+    const maxClockSkew = this.config.maxClockSkew || 60;
+    if (signature.timestamp > now + maxClockSkew) {
+      return {
+        valid: false,
+        code: 'clock_skew_future',
+        error: 'Timestamp outside acceptable skew window',
+        ageSeconds
+      };
+    }
+
+    // 4. Stale message check: rejects timestamps older than replay window
+    const replayWindow = this.config.replayWindowSeconds || 300;
+    if (signature.timestamp < now - replayWindow) {
+      return {
+        valid: false,
+        code: 'replay_window_expired',
+        error: 'Message timestamp outside replay window',
+        ageSeconds
+      };
+    }
+
+    // 5. Symmetric clock-skew check for backwards compatibility
+    if (Math.abs(now - signature.timestamp) > maxClockSkew) {
+      return {
+        valid: false,
+        code: 'clock_skew_future',
+        error: 'Timestamp outside acceptable skew window',
+        ageSeconds
+      };
+    }
+
+    // 6. Nonce deduplication check
+    if (this.config.nonceDeduplication && this.hasNonceBeenUsed(signature.nonce)) {
+      return {
+        valid: false,
+        code: 'replay_attack_detected',
+        error: 'Replay attack detected: nonce already used',
+        ageSeconds
+      };
+    }
+
+    // 7. Cryptographic signature check
+    const payloadString = JSON.stringify(message.data);
+    const signingString = `${signature.timestamp}.${signature.nonce}.${payloadString}`;
+    const expectedSignature = this.generateSignature(signingString, secret, signature.algorithm);
+
+    const actualBuffer = Buffer.from(signature.signature, 'utf8');
+    const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+    if (
+      actualBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+    ) {
+      return {
+        valid: false,
+        code: 'signature_verification_failed',
+        error: 'Signature verification failed',
+        ageSeconds
+      };
+    }
+
+    // Record nonce in sliding window
+    if (this.config.nonceDeduplication) {
+      this.recordNonce(signature.nonce, message.timestamp, message.id);
+    }
+
+    return {
+      valid: true,
+      ageSeconds
+    };
+  }
+
+  /**
+   * Authorizes a subscriber for an event and secret key.
+   */
+  verifySubscriberAuthorization(
+    subscriberId: string,
+    event: string,
+    secret: string
+  ): Result<WebhookSubscriber, 'subscriber_not_found' | 'inactive_subscriber' | 'unauthorized_event' | 'invalid_secret'> {
+    const subscriber = this.subscribers.get(subscriberId);
+    if (!subscriber) {
+      return err('subscriber_not_found');
+    }
+
+    if (!subscriber.active) {
+      return err('inactive_subscriber');
+    }
+
+    if (!subscriber.events.includes(event) && !subscriber.events.includes('*')) {
+      return err('unauthorized_event');
+    }
+
+    const secretBuffer = Buffer.from(secret, 'utf8');
+    const expectedBuffer = Buffer.from(subscriber.secret, 'utf8');
+    if (
+      secretBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(secretBuffer, expectedBuffer)
+    ) {
+      return err('invalid_secret');
+    }
+
+    return ok(subscriber);
+  }
+
+  /**
+   * Computes exponential backoff with jitter for delivery retries.
+   */
+  computeRetryBackoffMs(retryCount: number, baseDelayMs: number = 1000, maxDelayMs: number = 30000): number {
+    const exponential = Math.min(maxDelayMs, baseDelayMs * Math.pow(2, retryCount));
+    const jitter = Math.floor(Math.random() * (baseDelayMs * 0.2));
+    return exponential + jitter;
+  }
+
+  /**
+   * Reactivates a subscriber that was quarantined due to repeated delivery failures.
+   */
+  reactivateSubscriber(subscriberId: string): boolean {
+    const subscriber = this.subscribers.get(subscriberId);
+    if (!subscriber) return false;
+    subscriber.active = true;
+    subscriber.failureCount = 0;
+    return true;
   }
 
   registerSubscriber(subscriber: WebhookSubscriber): void {
@@ -196,6 +400,14 @@ export class WebhookVerifier {
   }
 
   cleanupOldRecords(olderThanSeconds: number): number {
+    if (olderThanSeconds === 0) {
+      const removed = this.replayRecords.size;
+      this.replayRecords.clear();
+      this.nonceQueue = [];
+      this.deliveryAttempts = [];
+      return removed;
+    }
+
     const cutoff = Math.floor(Date.now() / 1000) - olderThanSeconds;
     let removed = 0;
 
@@ -206,11 +418,19 @@ export class WebhookVerifier {
       }
     }
 
+    this.nonceQueue = this.nonceQueue.filter(entry => entry.timestamp >= cutoff);
     this.deliveryAttempts = this.deliveryAttempts.filter(a => {
-      return a.timestamp.getTime() / 1000 > cutoff;
+      return a.timestamp.getTime() / 1000 >= cutoff;
     });
 
     return removed;
+  }
+
+  reset(): void {
+    this.replayRecords.clear();
+    this.nonceQueue = [];
+    this.subscribers.clear();
+    this.deliveryAttempts = [];
   }
 
   getReplayProtectionStats(): {
@@ -247,6 +467,6 @@ export function createWebhookMiddleware(verifier: WebhookVerifier) {
       return { valid: false, error: 'Missing signature in payload' };
     }
 
-    return verifier.verifySignature(payload, secret);
+    return verifier.verifySignature(payload as unknown as WebhookMessage, secret);
   };
 }
