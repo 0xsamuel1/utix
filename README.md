@@ -38,7 +38,8 @@ Infrastructure docs: [Telemetry](./docs/TELEMETRY.md) ·
 [Event contract map](./docs/EVENT_CONTRACT_MAP.md) ·
 [Rollout guard & rollback](./docs/ROLLOUT_GUARD_AND_ROLLBACK.md) ·
 [Abuse detection](./docs/ABUSE_DETECTION.md) ·
-[Storage schema migration](./docs/STORAGE_SCHEMA_MIGRATION.md).
+[Storage schema migration](./docs/STORAGE_SCHEMA_MIGRATION.md) ·
+[Dry-run build repair](./docs/BUILD_REPAIR.md).
 
 ## Tools
 
