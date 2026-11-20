@@ -2,6 +2,14 @@
 
 Source: `core/dependencies/degradation.ts` (#340). Tests: `core/dependencies/__tests__/degradation.test.ts`.
 
+For user-facing publication, pass a tracker snapshot to
+`componentFromDependencyState` in `core/status/feed.ts` and supply an explicit
+public component id and name. The status feed maps healthy/degraded/down to
+operational/degraded/major outage and strips the failure mode, counters, and
+override metadata. Without the public mapping, the component is internal and
+is omitted. The existing `1.0.0` feed shape is unchanged; consumers receive
+ordinary component status changes through `/api/status`.
+
 Utix depends on services it does not run. The matrix records, for each one, how it fails, how hard the app retries, what it falls back to, and what the user is told. `createDegradationTracker().callWithFallback(id, primary, { fallback })` is the single code path that applies the table.
 
 ## Matrix
@@ -40,4 +48,5 @@ Every entry carries a user-facing `userMessage`. It never contains hosts, status
 - **No state to migrate.** The tracker is in-memory per instance, so a reload starts every dependency `healthy`. That is safe because the first failed call re-learns the state.
 - **Thundering herd.** The open circuit and the single half-open probe stop retries from piling onto a provider that is already down.
 - **Stale cache.** `cached_read` fallbacks must be labelled. The returned `userMessage` says the data may be out of date; callers must show it.
+- **Public status recovery.** Publish a new tracker snapshot after each dependency result. Success resets the tracker to healthy and therefore clears the public degraded component on the next feed build; if a mapping is removed during recovery, the component becomes internal and disappears. Never put upstream diagnostics in the public component name.
 - **Adding a dependency.** Add the id to `DEPENDENCY_IDS` and an entry to the matrix. The matrix test fails until every id has a retry budget, a fallback and a safe message.
