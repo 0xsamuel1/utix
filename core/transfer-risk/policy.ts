@@ -1,6 +1,6 @@
 import type { DomainState } from "@/core/invariants/types";
 import type { TransferTicketParams } from "@/core/invariants/mutations";
-import type { RiskSignal, TransferRiskAssessment, TransferRiskContext, TransferRiskPolicy } from "./types";
+import type { ExplainableRiskAssessment, RiskSignal, RiskSignalExplanation, TransferRiskAssessment, TransferRiskContext, TransferRiskPolicy } from "./types";
 
 export const DEFAULT_TRANSFER_RISK_POLICY: TransferRiskPolicy = Object.freeze({
   rapidResaleMs: 5 * 60_000,
@@ -68,4 +68,61 @@ export function assessTransferRisk(state: DomainState, request: TransferTicketPa
   if (approved) return { disposition: "allow", score, signals, code: "transfer_approved" };
   if (active.some((attempt) => attempt.status === "review_required" || attempt.status === "approved") || score >= policy.reviewScore) return { disposition: "review", score, signals, code: "transfer_review_required" };
   return { disposition: "allow", score, signals, code: "transfer_completed" };
+}
+
+const SIGNAL_DESCRIPTIONS: Record<RiskSignal, string> = {
+  rapid_resale: "Ticket was transferred very recently, suggesting a rapid resale pattern.",
+  device_changes: "Multiple device fingerprint changes detected within the observation window.",
+  recipient_pattern: "Recipient address has received an unusually high number of transfers recently.",
+  unusual_timing: "Transfer is occurring close to the ticket's validity expiration.",
+  repeated_attempts: "Actor has submitted many transfer attempts within a short retry window."
+};
+
+const DISPOSITION_SUMMARIES: Record<TransferRiskAssessment["disposition"], string> = {
+  allow: "Risk score is below the review threshold; transfer is allowed.",
+  review: "Risk score meets or exceeds the review threshold; manual review is required.",
+  block: "Risk score meets or exceeds the block threshold, or a prior rejection/block is active; transfer is blocked."
+};
+
+/**
+ * Produces an explainable risk assessment for high-impact actions (#417).
+ *
+ * Takes a base `TransferRiskAssessment` and the policy used to compute it, and
+ * returns a per-signal breakdown with weights, human-readable descriptions,
+ * and a summary of the decision rationale.
+ *
+ * For `invalid_risk_context` and early-block paths (no signals), the explanation
+ * reflects the blocking condition without leaking internal thresholds.
+ */
+export function explainRiskAssessment(
+  assessment: TransferRiskAssessment,
+  policy: TransferRiskPolicy = DEFAULT_TRANSFER_RISK_POLICY
+): ExplainableRiskAssessment {
+  if (assessment.code === "invalid_risk_context") {
+    return {
+      ...assessment,
+      explanations: [],
+      summary: "Risk context is invalid; policy parameters could not be validated. Transfer blocked.",
+      policyThresholds: { reviewScore: policy.reviewScore, blockScore: policy.blockScore }
+    };
+  }
+
+  const explanations: RiskSignalExplanation[] = assessment.signals.map((signal) => ({
+    signal,
+    weight: policy.weights[signal] ?? 0,
+    description: SIGNAL_DESCRIPTIONS[signal]
+  }));
+
+  const signalBreakdown = explanations.length > 0
+    ? explanations.map((e) => `${e.signal} (+${e.weight})`).join(", ")
+    : "no risk signals triggered";
+
+  const summary = `${DISPOSITION_SUMMARIES[assessment.disposition]} Score: ${assessment.score}. Signals: ${signalBreakdown}.`;
+
+  return {
+    ...assessment,
+    explanations,
+    summary,
+    policyThresholds: { reviewScore: policy.reviewScore, blockScore: policy.blockScore }
+  };
 }
