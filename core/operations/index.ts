@@ -16,6 +16,8 @@ export {
   operationMachine,
   resolveInterruptedStep,
   resolveInterruptedStepAuthorized,
+  rollbackOperation,
+  rollbackOperationAuthorized,
   runOperation,
   type ResolveOperationOptions,
   type StepDecision,
@@ -48,6 +50,8 @@ export {
   type StepCheckpoint,
   type StepDefinition,
   type StepOutcome,
+  type StepRollbackInput,
+  type StepRollbackOutcome,
   type StepRunInput,
   type StepStatus
 } from "@/core/operations/types";
