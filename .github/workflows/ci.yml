@@ -6,6 +6,13 @@ on:
     branches:
       - main
 
+# One run per workflow + ref. A new commit on a PR joins the same group and
+# cancels only that PR's superseded run. Pushes keep their own group and are
+# never cancelled by a PR, so release validation on main stays intact.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   quality:
     name: Lint, test, and build

@@ -63,3 +63,27 @@ export interface TransferRiskAssessment {
   readonly signals: readonly RiskSignal[];
   readonly code: TransferRiskCode;
 }
+
+/**
+ * Per-signal explanation for an explainable risk assessment (#417).
+ * Internal review data: never serialize to an attendee.
+ */
+export interface RiskSignalExplanation {
+  readonly signal: RiskSignal;
+  readonly weight: number;
+  readonly description: string;
+}
+
+/**
+ * Explainable risk assessment for high-impact actions (#417).
+ * Extends the base assessment with a per-signal breakdown and a human-readable
+ * summary. Internal review data: never expose to attendees.
+ */
+export interface ExplainableRiskAssessment extends TransferRiskAssessment {
+  readonly explanations: readonly RiskSignalExplanation[];
+  readonly summary: string;
+  readonly policyThresholds: {
+    readonly reviewScore: number;
+    readonly blockScore: number;
+  };
+}
