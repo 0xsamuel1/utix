@@ -23,10 +23,12 @@ export {
   type AuditInput,
   type AuditOptions,
   type AuditOutcome,
+  type AuditReceiptSigner,
   type AuditPage,
   type AuditScope,
   type AuditStorage,
   type AuditTarget,
+  type SignedAuditReceipt,
   type AuditTrail
 } from "@/core/audit/audit";
 export {

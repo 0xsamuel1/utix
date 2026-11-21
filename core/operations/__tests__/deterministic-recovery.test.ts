@@ -322,7 +322,7 @@ describe("deterministic recovery – authorization (#330)", () => {
     await runOperation(d, runOpts(store));
 
     const denied = resolveInterruptedStepAuthorized(
-      { role: "user", userId: "u1" },
+      { role: "viewer", userId: "u1" },
       "op-1",
       "step-a",
       "applied",
@@ -341,7 +341,7 @@ describe("deterministic recovery – authorization (#330)", () => {
     await runOperation(d, runOpts(store));
 
     const allowed = resolveInterruptedStepAuthorized(
-      { role: "admin", userId: "operator-1" },
+      { role: "maintainer", userId: "operator-1" },
       "op-1",
       "step-a",
       "applied",
@@ -355,7 +355,7 @@ describe("deterministic recovery – authorization (#330)", () => {
     const d = def([simpleStep("step-a", () => ({ status: "failed", committed: false, errorCode: "err" }))]);
     await runOperation(d, runOpts(store));
     const denied = abandonOperationAuthorized(
-      { role: "user", userId: "u1" },
+      { role: "viewer", userId: "u1" },
       "op-1",
       { storage: store }
     );
