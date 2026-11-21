@@ -56,3 +56,20 @@ export {
   type StepStatus
 } from "@/core/operations/types";
 export { createSideEffectDispatcher, type DispatchJob, type DispatchStore, type DispatchStatus, type SideEffectDispatcherOptions } from "./dispatcher";
+
+export {
+  classifyPartialFailure,
+  executeOperatorAction,
+  getOperatorDashboard,
+  isUnresolvedPartialFailure,
+  type OperatorActionKind,
+  type OperatorActionRequest,
+  type OperatorActionResult,
+  type OperatorDashboardErrorCode,
+  type OperatorDashboardFilter,
+  type OperatorDashboardItem,
+  type OperatorDashboardOptions,
+  type OperatorDashboardSnapshot,
+  type PartialFailureCategory,
+  type PartialFailureSeverity
+} from "@/core/operations/operator-dashboard";
