@@ -126,6 +126,7 @@ export interface BoundedCache<V> {
   set(key: string, value: V, options?: CacheWriteOptions): Result<true, CacheWriteErrorCode>;
   /**
    * Returns the cached value or runs `load` once for every concurrent caller.
+   * A completed load that cannot meet this caller's read bounds returns `cache_stale_write`.
    * A failed load is never cached, so the next call retries it. A load that
    * was invalidated while in flight returns its value but does not store it.
    */
@@ -328,8 +329,14 @@ export function createBoundedCache<V>(options: BoundedCacheOptions): BoundedCach
     const cached = get(key, { minLedgerSequence, maxAgeMs });
     if (cached.ok) return cached;
 
+    const ensureFresh = (loaded: Result<V, C | CacheWriteErrorCode>): Result<V, C | CacheWriteErrorCode> => {
+      if (!loaded.ok || (minLedgerSequence === undefined && maxAgeMs === undefined)) return loaded;
+      // A shared load may have started under weaker bounds than this caller requires.
+      const fresh = get(key, { minLedgerSequence, maxAgeMs });
+      return fresh.ok ? fresh : err("cache_stale_write");
+    };
     const pending = inflight.get(key) as Promise<Result<V, C | CacheWriteErrorCode>> | undefined;
-    if (pending) return pending;
+    if (pending) return pending.then(ensureFresh);
 
     // `load` starts on the next microtask, so `run` is always assigned before
     // either callback compares against it — even when `load` throws at once.
@@ -346,7 +353,7 @@ export function createBoundedCache<V>(options: BoundedCacheOptions): BoundedCach
       });
     inflight.set(key, run);
     if (write.sourceEntityId !== undefined) inflightSource.set(key, { run, id: write.sourceEntityId });
-    return run;
+    return run.then(ensureFresh);
   }
 
   function invalidate(key: string): boolean {

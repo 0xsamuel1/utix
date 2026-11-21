@@ -166,6 +166,20 @@ const evicted = cache.evictStale(MAINTAINER, "verify");
 assert.ok(evicted.ok);
 assert.deepEqual([...evicted.value.evicted].sort(), ["balances:GC", "fees"], "the maintainer sweep evicts exactly the expired entries");
 assert.equal(cache.stats().size, 0);
+
+// A stricter reader must not inherit an older caller's in-flight ledger snapshot.
+const freshnessCache = createBoundedCache({ maxEntries: 2, ttlMs: 1_000 });
+let releaseOld;
+const oldRead = freshnessCache.getOrLoad("account", () => new Promise((resolve) => { releaseOld = resolve; }), { ledgerSequence: 10 });
+await Promise.resolve();
+const strictRead = freshnessCache.getOrLoad("account", async () => ({ ok: true, value: "fresh-12" }), { minLedgerSequence: 12, ledgerSequence: 12 });
+releaseOld({ ok: true, value: "old-10" });
+assert.deepEqual(await oldRead, { ok: true, value: "old-10" });
+assert.deepEqual(await strictRead, { ok: false, code: "cache_stale_write" });
+assert.deepEqual(freshnessCache.get("account"), { ok: false, code: "cache_miss" });
+assert.deepEqual(await freshnessCache.getOrLoad("account", async () => ({ ok: true, value: "fresh-12" }), { minLedgerSequence: 12, ledgerSequence: 12 }), { ok: true, value: "fresh-12" });
+assert.deepEqual(await freshnessCache.getOrLoad("other", async () => ({ ok: true, value: "old-19" }), { minLedgerSequence: 20, ledgerSequence: 19 }), { ok: false, code: "cache_stale_write" });
+assert.deepEqual(freshnessCache.get("other"), { ok: false, code: "cache_miss" });
 console.log("    [PASS] #411 bounded cache invalidates by key, entity, head and sweep\n");
 
 console.log("============================================================");
