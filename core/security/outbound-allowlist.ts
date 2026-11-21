@@ -19,7 +19,7 @@ export interface OutboundAllowlist {
 }
 
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
-const HOSTNAME = /^[a-z0-9.-]+$/i;
+const HOSTNAME = /^(?=.{4,253}$)(?:[a-z0-9-]+\\.)+[a-z]{2,}$/i;
 
 function normalizedOrigin(value: string): string | null {
   try {
