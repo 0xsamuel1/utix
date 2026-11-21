@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { correlationFromRequest, withRequestCorrelation } from "../request-correlation";
+import { createWorkerFramework } from "@/core/workers/queue";
 import { createCaptureSink, setTelemetrySink } from "../telemetry";
 
 describe("request correlation", () => {
@@ -7,6 +8,21 @@ describe("request correlation", () => {
     const ctx = correlationFromRequest(new Request("https://example.test", { headers: { "x-correlation-id": "trace-123" } }));
     expect(ctx.correlationId).toBe("trace-123");
     expect(ctx.job({ operation: "work", params: {} }).correlationId).toBe("trace-123");
+  });
+
+  it("keeps the same request ID across worker failure and dead-letter recovery", () => {
+    const context = correlationFromRequest(new Request("https://example.test", {
+      headers: { "x-correlation-id": "trace-worker-retry" }
+    }));
+    const worker = createWorkerFramework();
+    worker.register("trace-job", () => { throw new Error("expected failure"); }, { maxAttempts: 1 });
+    const job = worker.enqueue(context.job({ operation: "trace-job", params: {}, maxAttempts: 1 }));
+    worker.drainDueJobs();
+    expect(worker.getById(job.id)?.status).toBe("dead_lettered");
+    const recovered = worker.recoverDeadLetter(job.id, { role: "maintainer" });
+    expect(recovered.ok).toBe(true);
+    if (!recovered.ok) throw Error("expected recovery");
+    expect(recovered.value.correlationId).toBe(context.correlationId);
   });
 
   it("rejects malformed and oversized IDs without reflecting untrusted text", () => {
