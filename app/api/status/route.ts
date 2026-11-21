@@ -1,5 +1,5 @@
 import { correlationFromRequest } from "@/core/telemetry/request-correlation";
-import { emitTelemetry } from "@/core/telemetry/telemetry";
+import { emitTelemetry, newCorrelationId } from "@/core/telemetry/telemetry";
 import { buildStatusResponse } from "@/core/status/service-config";
 
 // Contributor diagnostics: local setup and dependency failures surface as a
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export function GET(request?: Request): Response {
   const correlationId = request
     ? correlationFromRequest(request).correlationId
-    : crypto.randomUUID();
+    : newCorrelationId();
   const startedAt = Date.now();
   try {
     const response = buildStatusResponse(process.env, Date.now());
