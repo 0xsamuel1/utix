@@ -117,7 +117,11 @@ export const SENSITIVE_ACTIONS = [
   /** An ownership transfer proposal was swept as expired. */
   "ownership.transfer.swept",
   /** Incident recovery verification executed and passed or triggered rollback. */
-  "incident.recovery_verified"
+  "incident.recovery_verified",
+  /** A stale cache or index projection was repaired (or the repair was refused) (#356, #411). */
+  "projection.repaired",
+  /** A stale-projection repair was rolled back from its backup snapshot (#356, #411). */
+  "projection.restored"
 ] as const;
 
 export type AuditAction = (typeof SENSITIVE_ACTIONS)[number];
