@@ -44,7 +44,9 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { createIsolatedAuditTrail, type AuditActor } from "@/core/audit/audit";
+import { generateKeyPairSync } from "node:crypto";
+import { createIsolatedAuditTrail, type AuditActor } from "@/core/audit";
+import { createEd25519AuditSigner } from "@/core/audit/signed-receipt";
 import {
   createAuditEvidenceBundle,
   verifyAuditEvidenceBundle
@@ -73,6 +75,13 @@ function user(id = "viewer-1"): AuditActor {
   return { kind: "user", id };
 }
 
+const keyPair = generateKeyPairSync("ed25519");
+const receiptSigner = createEd25519AuditSigner({
+  signerId: "test-admin-signer",
+  privateKey: keyPair.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+  publicKey: keyPair.publicKey.export({ type: "spki", format: "pem" }).toString()
+});
+
 /**
  * Returns a store wired to a fresh isolated trail and a snapshot store.
  * The record seam writes to both: the trail for query/export, and the
@@ -84,6 +93,7 @@ function makeHarness() {
   const snapshots = new ComplianceSnapshotStore(snapshotStorage);
 
   const store = createAdminConfigStore({
+    receiptSigner,
     record: (input) => {
       const result = trail.record(input);
       if (!result.ok) return undefined;
@@ -262,7 +272,7 @@ describe("admin-config audit evidence — failure path", () => {
 
   it("does not apply the change and does not emit a bundle entry when the trail rejects the event", () => {
     // Simulate a trail that always rejects (e.g. storage full).
-    const store = createAdminConfigStore({ record: () => undefined });
+    const store = createAdminConfigStore({ receiptSigner, record: () => undefined });
     const result = store.setConfig(changeInput());
 
     expect(result.ok).toBe(false);

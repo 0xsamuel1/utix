@@ -92,7 +92,7 @@ describe('WebhookVerifier', () => {
 
     webhookVerifier.registerSubscriber(subscriber);
 
-    webhookVerifier.recordDeliveryAttempt({
+    const attempt = {
       id: 'attempt-1',
       subscriberId: 'sub-1',
       messageId: 'msg-1',
@@ -100,11 +100,14 @@ describe('WebhookVerifier', () => {
       statusCode: 200,
       retryCount: 0,
       success: true,
-    });
+    };
+    webhookVerifier.recordDeliveryAttempt(attempt);
+    webhookVerifier.recordDeliveryAttempt(attempt);
 
     const attempts = webhookVerifier.getDeliveryAttempts('sub-1');
     expect(attempts.length).toBe(1);
     expect(attempts[0].success).toBe(true);
+    expect(subscriber.successCount).toBe(1);
   });
 
   it('should get replay protection stats', () => {

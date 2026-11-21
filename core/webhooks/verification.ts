@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import {
-  WebhookSignature,
   WebhookMessage,
   WebhookVerificationConfig,
   ReplayProtectionRecord,
@@ -8,7 +7,9 @@ import {
   WebhookDeliveryAttempt,
   ReplayWindowErrorCode,
   ReplayWindowOptions,
-  ReplayWindowVerificationResult
+  ReplayWindowVerificationResult,
+  ReplayProtectionStore,
+  WebhookVerifierOptions
 } from './types';
 import { err, ok, type Result } from '@/core/result/result';
 
@@ -20,6 +21,58 @@ export const MAX_WEBHOOK_NONCE_LENGTH = 128;
 export const MAX_REPLAY_NONCES_CAPACITY = 50_000;
 
 const SUPPORTED_ALGORITHMS = ['sha256', 'sha512'];
+
+export function createMemoryReplayProtectionStore(): ReplayProtectionStore {
+  const records = new Map<string, ReplayProtectionRecord>();
+  return {
+    get: (nonce) => records.get(nonce),
+    claim(record) {
+      if (records.has(record.nonce)) return false;
+      records.set(record.nonce, record);
+      return true;
+    },
+    removeExpired(cutoffTimestamp) {
+      let removed = 0;
+      for (const [nonce, record] of records) {
+        if (record.timestamp < cutoffTimestamp) {
+          records.delete(nonce);
+          removed += 1;
+        }
+      }
+      return removed;
+    },
+    trim(maxRecords) {
+      let removed = 0;
+      while (records.size > maxRecords) {
+        const oldest = records.keys().next().value;
+        if (oldest === undefined) break;
+        records.delete(oldest);
+        removed += 1;
+      }
+      return removed;
+    },
+    clear: () => records.clear(),
+    get size() {
+      return records.size;
+    }
+  };
+}
+
+function messageFingerprint(
+  message: WebhookMessage,
+  subscriberId?: string,
+  expectedEvent?: string
+): string {
+  const serialized = JSON.stringify({
+    id: message.id,
+    event: message.event,
+    data: message.data,
+    signature: message.signature,
+    subscriberId,
+    expectedEvent
+  });
+  return crypto.createHash('sha256').update(serialized).digest('hex');
+}
 
 /**
  * Structural check for an untrusted message. Returns the reason it is
@@ -56,13 +109,16 @@ export class WebhookVerifier {
     maxClockSkew: 60,
   };
 
-  private replayRecords: Map<string, ReplayProtectionRecord> = new Map();
-  private nonceQueue: Array<{ nonce: string; timestamp: number }> = [];
+  private readonly replayStore: ReplayProtectionStore;
   private subscribers: Map<string, WebhookSubscriber> = new Map();
   private deliveryAttempts: DeliveryAttempt[] = [];
 
-  constructor(private config: Partial<WebhookVerificationConfig> = {}) {
+  constructor(
+    private config: Partial<WebhookVerificationConfig> = {},
+    options: WebhookVerifierOptions = {}
+  ) {
     this.config = { ...this.defaultConfig, ...config };
+    this.replayStore = options.replayStore ?? createMemoryReplayProtectionStore();
   }
 
   generateSignature(payload: string, secret: string, algorithm: 'sha256' | 'sha512' = 'sha256'): string {
@@ -120,8 +176,14 @@ export class WebhookVerifier {
     }
 
     // Verify nonce is unique
-    if (this.config.nonceDeduplication && this.hasNonceBeenUsed(signature.nonce)) {
-      return { valid: false, error: 'Replay attack detected: nonce already used' };
+    if (this.config.nonceDeduplication) {
+      try {
+        if (this.hasNonceBeenUsed(signature.nonce)) {
+          return { valid: false, error: 'Replay attack detected: nonce already used' };
+        }
+      } catch {
+        return { valid: false, error: 'Replay protection store unavailable' };
+      }
     }
 
     // Verify cryptographic signature with constant-time equality check
@@ -141,41 +203,45 @@ export class WebhookVerifier {
 
     // Record this nonce as used
     if (this.config.nonceDeduplication) {
-      this.recordNonce(signature.nonce, message.timestamp, message.id);
+      try {
+        if (!this.recordNonce(signature.nonce, message.timestamp, message.id)) {
+          return { valid: false, error: 'Replay attack detected: nonce already used' };
+        }
+      } catch {
+        return { valid: false, error: 'Replay protection store unavailable' };
+      }
     }
 
     return { valid: true };
   }
 
   private hasNonceBeenUsed(nonce: string): boolean {
-    return this.replayRecords.has(nonce);
+    return this.replayStore.get(nonce) !== undefined;
   }
 
   /**
-   * Records a nonce and slides the replay window in O(1) amortized time.
-   * Space complexity: O(M) bounded to MAX_REPLAY_NONCES_CAPACITY.
+   * Atomically claims a nonce and prunes the configured replay window.
+   * Store complexity depends on the injected adapter.
    */
-  private recordNonce(nonce: string, timestamp: number, eventId: string): void {
-    this.replayRecords.set(nonce, {
+  private recordNonce(
+    nonce: string,
+    timestamp: number,
+    eventId: string,
+    fingerprint?: string,
+    now = Math.floor(Date.now() / 1000)
+  ): boolean {
+    this.replayStore.removeExpired(now - (this.config.replayWindowSeconds || 300));
+    const claimed = this.replayStore.claim({
       nonce,
       timestamp,
       eventId,
       verified: true,
+      fingerprint
     });
-    this.nonceQueue.push({ nonce, timestamp });
-
-    // O(1) amortized cleanup: pop expired records from front of queue
-    const cutoff = Math.floor(Date.now() / 1000) - (this.config.replayWindowSeconds || 300);
-    while (this.nonceQueue.length > 0 && this.nonceQueue[0].timestamp < cutoff) {
-      const expired = this.nonceQueue.shift()!;
-      this.replayRecords.delete(expired.nonce);
+    if (claimed && this.replayStore.size > MAX_REPLAY_NONCES_CAPACITY) {
+      this.replayStore.trim(MAX_REPLAY_NONCES_CAPACITY);
     }
-
-    // Bounded capacity safeguard: discard oldest if capacity exceeded
-    while (this.nonceQueue.length > MAX_REPLAY_NONCES_CAPACITY) {
-      const oldest = this.nonceQueue.shift()!;
-      this.replayRecords.delete(oldest.nonce);
-    }
+    return claimed;
   }
 
   /**
@@ -188,9 +254,9 @@ export class WebhookVerifier {
    * 4. Replay window freshness (replayWindowSeconds)
    * 5. Nonce deduplication in bounded sliding window
    * 6. Constant-time cryptographic HMAC verification
+   * 7. Atomic nonce claim
    *
-   * Time complexity: O(1) amortized.
-   * Space complexity: O(1) auxiliary.
+   * Replay-store latency and persistence guarantees depend on the adapter.
    */
   verifyReplayWindow(
     message: WebhookMessage,
@@ -265,17 +331,7 @@ export class WebhookVerifier {
       };
     }
 
-    // 6. Nonce deduplication check
-    if (this.config.nonceDeduplication && this.hasNonceBeenUsed(signature.nonce)) {
-      return {
-        valid: false,
-        code: 'replay_attack_detected',
-        error: 'Replay attack detected: nonce already used',
-        ageSeconds
-      };
-    }
-
-    // 7. Cryptographic signature check
+    // 6. Cryptographic signature check
     const payloadString = JSON.stringify(message.data);
     const signingString = `${signature.timestamp}.${signature.nonce}.${payloadString}`;
     const expectedSignature = this.generateSignature(signingString, secret, signature.algorithm);
@@ -295,9 +351,46 @@ export class WebhookVerifier {
       };
     }
 
-    // Record nonce in sliding window
+    // 7. Claim the nonce only after authorization, freshness and signature checks.
     if (this.config.nonceDeduplication) {
-      this.recordNonce(signature.nonce, message.timestamp, message.id);
+      const fingerprint = messageFingerprint(
+        message,
+        options.subscriberId,
+        options.expectedEvent ?? message.event
+      );
+      try {
+        const existing = this.replayStore.get(signature.nonce);
+        if (existing) {
+          if (
+            options.allowIdempotentRetry &&
+            existing.eventId === message.id &&
+            existing.fingerprint === fingerprint
+          ) {
+            return { valid: true, ageSeconds, replayed: true };
+          }
+          return {
+            valid: false,
+            code: 'replay_attack_detected',
+            error: 'Replay attack detected: nonce already used',
+            ageSeconds
+          };
+        }
+        if (!this.recordNonce(signature.nonce, message.timestamp, message.id, fingerprint, now)) {
+          return {
+            valid: false,
+            code: 'replay_attack_detected',
+            error: 'Replay attack detected: nonce already used',
+            ageSeconds
+          };
+        }
+      } catch {
+        return {
+          valid: false,
+          code: 'replay_store_unavailable',
+          error: 'Replay protection store unavailable',
+          ageSeconds
+        };
+      }
     }
 
     return {
@@ -374,6 +467,7 @@ export class WebhookVerifier {
   }
 
   recordDeliveryAttempt(attempt: WebhookDeliveryAttempt): void {
+    if (this.deliveryAttempts.some((existing) => existing.id === attempt.id)) return;
     this.deliveryAttempts.push(attempt as DeliveryAttempt);
 
     // Update subscriber statistics
@@ -401,24 +495,14 @@ export class WebhookVerifier {
 
   cleanupOldRecords(olderThanSeconds: number): number {
     if (olderThanSeconds === 0) {
-      const removed = this.replayRecords.size;
-      this.replayRecords.clear();
-      this.nonceQueue = [];
+      const removed = this.replayStore.size;
+      this.replayStore.clear();
       this.deliveryAttempts = [];
       return removed;
     }
 
     const cutoff = Math.floor(Date.now() / 1000) - olderThanSeconds;
-    let removed = 0;
-
-    for (const [key, record] of this.replayRecords) {
-      if (record.timestamp < cutoff) {
-        this.replayRecords.delete(key);
-        removed++;
-      }
-    }
-
-    this.nonceQueue = this.nonceQueue.filter(entry => entry.timestamp >= cutoff);
+    const removed = this.replayStore.removeExpired(cutoff);
     this.deliveryAttempts = this.deliveryAttempts.filter(a => {
       return a.timestamp.getTime() / 1000 >= cutoff;
     });
@@ -427,8 +511,7 @@ export class WebhookVerifier {
   }
 
   reset(): void {
-    this.replayRecords.clear();
-    this.nonceQueue = [];
+    this.replayStore.clear();
     this.subscribers.clear();
     this.deliveryAttempts = [];
   }
@@ -440,7 +523,7 @@ export class WebhookVerifier {
     activeSubscribers: number;
   } {
     return {
-      totalNonces: this.replayRecords.size,
+      totalNonces: this.replayStore.size,
       totalDeliveryAttempts: this.deliveryAttempts.length,
       totalSubscribers: this.subscribers.size,
       activeSubscribers: Array.from(this.subscribers.values()).filter(s => s.active).length,
@@ -448,7 +531,7 @@ export class WebhookVerifier {
   }
 }
 
-interface DeliveryAttempt extends WebhookDeliveryAttempt {}
+type DeliveryAttempt = WebhookDeliveryAttempt;
 
 interface WebhookRequest {
   body: {
