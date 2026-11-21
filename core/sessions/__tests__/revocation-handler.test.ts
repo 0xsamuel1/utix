@@ -241,4 +241,182 @@ describe('RevocationHandler', () => {
       expect(handler.isRevocationInProgress(session.id)).toBe(false);
     });
   });
+
+  describe('handleSecurityEvent (#402)', () => {
+    it('scopes a user stale-session event to that user', async () => {
+      const stale = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      const device = {
+        deviceType: 'web' as const,
+        deviceName: 'Stale Browser',
+        userAgent: 'test',
+        ipAddress: '192.0.2.1',
+        lastActivity: stale,
+      };
+      const own = sessionManager.createSession(userId, device);
+      const other = sessionManager.createSession('other-user', device);
+
+      const result = await handler.handleSecurityEvent({
+        type: 'stale_session_timeout',
+        userId,
+        actor: { id: userId, role: 'user' },
+        timestamp: new Date(),
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.revokedSessionIds).toContain(own.id);
+        expect(result.value.revokedSessionIds).not.toContain(other.id);
+      }
+      expect(sessionManager.isSessionRevoked(other.id)).toBe(false);
+    });
+
+    it('handles account_compromised by revoking all user sessions and invalidating tokens', async () => {
+      const session2 = sessionManager.createSession(userId, {
+        deviceType: 'mobile',
+        deviceName: 'Mobile Phone',
+        userAgent: 'Mobile Safari',
+        ipAddress: '192.168.1.5',
+      });
+
+      const event: SecurityEvent = {
+        type: 'account_compromised',
+        userId,
+        timestamp: new Date(),
+        actor: { id: userId, role: 'user' },
+        reason: 'Compromised credentials reported',
+      };
+
+      const result = await handler.handleSecurityEvent(event);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.revokedSessionIds).toContain(session.id);
+        expect(result.value.revokedSessionIds).toContain(session2.id);
+        expect(result.value.eventType).toBe('account_compromised');
+      }
+
+      expect(sessionManager.isSessionRevoked(session.id)).toBe(true);
+      expect(sessionManager.isSessionRevoked(session2.id)).toBe(true);
+      expect(sessionManager.isTokenRevoked(session.syncToken)).toBe(true);
+      expect(sessionManager.isTokenRevoked(session2.syncToken)).toBe(true);
+    });
+
+    it('handles role_downgraded by revoking all sessions when initiated by maintainer', async () => {
+      const event: SecurityEvent = {
+        type: 'role_downgraded',
+        userId,
+        timestamp: new Date(),
+        actor: { id: 'admin-1', role: 'maintainer' },
+        reason: 'Demoted from admin to user',
+      };
+
+      const result = await handler.handleSecurityEvent(event);
+      expect(result.ok).toBe(true);
+      expect(sessionManager.isSessionRevoked(session.id)).toBe(true);
+    });
+
+    it('handles password_changed while preserving current device when requested', async () => {
+      const device2 = sessionManager.addDevice(session.id, {
+        deviceType: 'mobile',
+        deviceName: 'Phone',
+        userAgent: 'Mobile Safari',
+        ipAddress: '192.168.1.6',
+      });
+
+      const event: SecurityEvent = {
+        type: 'password_changed',
+        userId,
+        deviceId: device2?.id,
+        timestamp: new Date(),
+        actor: { id: userId, role: 'user' },
+      };
+
+      const result = await handler.handleSecurityEvent(event, { preserveCurrentDevice: true });
+      expect(result.ok).toBe(true);
+      const current = sessionManager.getSession(session.id);
+      expect(current?.revoked).toBe(false);
+      expect(current?.primaryDevice).toBe(device2?.id);
+    });
+
+    it('handles suspicious_activity_detected on specific device', async () => {
+      const device2 = sessionManager.addDevice(session.id, {
+        deviceType: 'desktop',
+        deviceName: 'Suspicious Linux Box',
+        userAgent: 'curl/7.68',
+        ipAddress: '10.0.0.99',
+      });
+
+      const event: SecurityEvent = {
+        type: 'suspicious_activity_detected',
+        userId,
+        sessionId: session.id,
+        deviceId: device2?.id,
+        timestamp: new Date(),
+        actor: { id: 'system', role: 'system' },
+        reason: 'Unusual geolocation access pattern',
+      };
+
+      const result = await handler.handleSecurityEvent(event);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.revokedDeviceIds).toContain(device2?.id);
+      }
+    });
+
+    it('enforces authorization: prevents user from revoking another user session', async () => {
+      const event: SecurityEvent = {
+        type: 'password_changed',
+        userId: 'other-user',
+        timestamp: new Date(),
+        actor: { id: userId, role: 'user' },
+      };
+
+      const result = await handler.handleSecurityEvent(event);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe('unauthorized');
+      }
+    });
+
+    it('enforces authorization: prevents user from initiating role_downgraded or manual_admin_revocation', async () => {
+      const roleEvent: SecurityEvent = {
+        type: 'role_downgraded',
+        userId,
+        timestamp: new Date(),
+        actor: { id: userId, role: 'user' },
+      };
+      const adminEvent: SecurityEvent = {
+        type: 'manual_admin_revocation',
+        userId,
+        timestamp: new Date(),
+        actor: { id: userId, role: 'user' },
+      };
+
+      const roleResult = await handler.handleSecurityEvent(roleEvent);
+      expect(roleResult.ok).toBe(false);
+      if (!roleResult.ok) {
+        expect(roleResult.code).toBe('unauthorized');
+      }
+
+      const adminResult = await handler.handleSecurityEvent(adminEvent);
+      expect(adminResult.ok).toBe(false);
+      if (!adminResult.ok) {
+        expect(adminResult.code).toBe('unauthorized');
+      }
+    });
+
+    it('validates security event and rejects malformed payloads', async () => {
+      const badEvent = {
+        type: '' as any,
+        userId: '',
+        actor: null as any,
+        timestamp: new Date(),
+      };
+
+      const result = await handler.handleSecurityEvent(badEvent);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.code).toBe('invalid_security_event');
+      }
+    });
+  });
 });

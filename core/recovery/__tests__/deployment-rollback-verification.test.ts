@@ -195,7 +195,7 @@ describe("Issue #406: Deployment Rollback Verification Checks", () => {
       }
     });
 
-    it("passes confirmed redemptions on rolled-back release without manual repair", () => {
+    it("detects redemptions processed under rolled-back protocol version", () => {
       const dataset: ProtocolDataset = {
         ...cleanDataset(),
         redemptions: [
@@ -205,7 +205,7 @@ describe("Issue #406: Deployment Rollback Verification Checks", () => {
             eventId: "ev-1",
             redeemedBy: BOB,
             nonce: "nonce-confirmed",
-            protocolVersion: "2.0.0",
+            protocolVersion: "2.0.0", // TARGET.rolledBackFromVersion is "2.0.0"
             redeemedAt: 1_700_000_000_000,
             isConfirmed: true
           }
@@ -219,7 +219,7 @@ describe("Issue #406: Deployment Rollback Verification Checks", () => {
       expect(res.ok).toBe(true);
       if (res.ok) {
         const check = res.value.checks.find((c) => c.name === "partially_processed_redemptions");
-        expect(check?.passed).toBe(true);
+        expect(check?.passed).toBe(false);
       }
     });
   });

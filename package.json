@@ -56,6 +56,8 @@
     "verify:issues-219-240": "node --loader ./scripts/loader.mjs scripts/verify-issues-219-240.mjs",
     "verify:issues-354-357": "node --loader ./scripts/loader.mjs scripts/verify-issues-354-357.mjs",
     "verify:issues-365-369": "node --loader ./scripts/loader.mjs scripts/verify-issues-365-369.mjs",
+    "verify:issues-450-453": "node --loader ./scripts/loader.mjs scripts/verify-issues-450-453.mjs",
+    "verify:issues-400-403": "node --loader ./scripts/loader.mjs scripts/verify-issues-400-403.mjs",
     "verify:issues-405-413": "node --loader ./scripts/loader.mjs scripts/verify-issues-405-413.mjs",
     "backfill": "node --loader ./scripts/loader.mjs scripts/backfill.mjs"
   },

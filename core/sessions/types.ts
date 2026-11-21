@@ -110,3 +110,11 @@ export interface RevocationReport {
   readonly reason?: string;
 }
 
+export interface SecurityEventHandlingOptions {
+  readonly maxRetries?: number;
+  readonly backoffMs?: number;
+  readonly timeoutMs?: number;
+  readonly preserveCurrentDevice?: boolean;
+}
+
+

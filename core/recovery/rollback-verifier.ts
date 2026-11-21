@@ -293,14 +293,14 @@ export function verifyPartiallyProcessedRedemptions(
     const isUnconfirmed = !redemption.isConfirmed;
     const isRolledBackVersion = redemption.protocolVersion === target.rolledBackFromVersion;
 
-    if (isUnconfirmed) {
+    if (isUnconfirmed || isRolledBackVersion) {
       affected.push(redemption.id);
       repairs.push({
         recordId: redemption.id,
         domain: "redemption",
         severity: "critical",
         reason: isRolledBackVersion
-          ? `Unconfirmed redemption recorded under rolled-back protocol version ${redemption.protocolVersion}`
+          ? `Redemption processed under rolled-back protocol version ${redemption.protocolVersion}`
           : `Unconfirmed redemption nonce detected without on-chain settlement confirmation`,
         suggestedAction: `Review ticket ${redemption.ticketId} attendance status with organizer dashboard. If unconfirmed, reset ticket status to issued`,
         details: {
