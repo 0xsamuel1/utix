@@ -33,8 +33,10 @@ export {
   OperationalDataRetentionManager,
   scrubSensitiveValue,
   type DeletionOptions,
+  type DeletionVerificationProof,
+  type RetentionEnforcementVerificationResult,
   type RetentionErrorCode,
   type RetentionPolicy,
   type RetentionSweepResult
-} from "./retention";
-export { createAuditEvidenceBundle, verifyAuditEvidenceBundle, type AuditEvidenceBundle } from "./evidence-bundle";
+} from "./retention.ts";
+export { createAuditEvidenceBundle, verifyAuditEvidenceBundle, type AuditEvidenceBundle } from "./evidence-bundle.ts";

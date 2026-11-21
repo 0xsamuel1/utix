@@ -4,8 +4,9 @@ import type {
   RevocationReport,
   SecurityEvent,
   CrossDeviceSession,
-} from './types';
-import { sessionManager } from './manager';
+  SecurityEventHandlingOptions,
+} from './types.ts';
+import { sessionManager } from './manager.ts';
 
 export interface RevocationError {
   code: SessionErrorCode;
@@ -56,7 +57,16 @@ export class RevocationHandler {
       const report = await promise;
       return ok(report);
     } catch (error) {
-      const code = error instanceof Error && 'code' in error ? (error.code as SessionErrorCode) : 'revocation_failed';
+      const code =
+        error && typeof error === 'object' && 'code' in error
+          ? (error.code as SessionErrorCode)
+          : 'revocation_failed';
+      this.recordError({
+        code,
+        message: error instanceof Error ? error.message : `Failed to revoke session ${sessionId}: ${code}`,
+        retryable: code === 'revocation_failed' || code === 'revocation_retries_exhausted',
+        timestamp: new Date(),
+      });
       return err(code);
     } finally {
       this.revocationInProgress.delete(sessionId);
@@ -80,7 +90,7 @@ export class RevocationHandler {
           this.recordSuccess(userId);
           return result;
         }
-        lastError = result.error;
+        lastError = result.code;
 
         if (attempt < maxRetries) {
           const delay = this.exponentialBackoff(attempt, options.backoffMs ?? 100);
@@ -149,6 +159,102 @@ export class RevocationHandler {
     }
   }
 
+  /**
+   * Evaluates and applies session invalidation in response to a SecurityEvent (#402).
+   *
+   * Enforces role authorization, event-driven invalidation scoping,
+   * token disconnection, cross-device invalidation, and retry resilience.
+   *
+   * Time Complexity: O(S * D) where S is sessions and D is devices per session.
+   * Space Complexity: O(R) for revoked identifiers in report.
+   */
+  async handleSecurityEvent(
+    event: SecurityEvent,
+    opts?: SecurityEventHandlingOptions
+  ): Promise<Result<RevocationReport, SessionErrorCode>> {
+    if (!event || !event.type || !event.userId || !event.actor) {
+      return err('invalid_security_event');
+    }
+
+    // Role-based Authorization Gate
+    if (event.actor.role === 'user') {
+      if (event.actor.id !== event.userId) {
+        return err('unauthorized');
+      }
+      // Users cannot perform admin-only security event operations
+      if (event.type === 'role_downgraded' || event.type === 'manual_admin_revocation') {
+        return err('unauthorized');
+      }
+    }
+
+    const options = { ...this.options, ...opts };
+
+    switch (event.type) {
+      case 'account_compromised':
+        return this.revokeAllUserSessionsAsync(event.userId, event, undefined, options);
+
+      case 'role_downgraded':
+        return this.revokeAllUserSessionsAsync(event.userId, event, undefined, options);
+
+      case 'password_changed': {
+        const exceptDeviceId = options.preserveCurrentDevice && event.deviceId ? event.deviceId : undefined;
+        return this.revokeAllUserSessionsAsync(event.userId, event, exceptDeviceId, options);
+      }
+
+      case 'suspicious_activity_detected': {
+        if (event.sessionId && event.deviceId) {
+          const deviceResult = sessionManager.revokeDevice(event.sessionId, event.deviceId, event);
+          if (deviceResult.ok) {
+            this.recordSuccess(event.sessionId);
+            return deviceResult;
+          }
+          this.recordError({
+            code: deviceResult.error,
+            message: `Failed to revoke device ${event.deviceId} on session ${event.sessionId}`,
+            retryable: false,
+            timestamp: new Date(),
+          });
+          return deviceResult;
+        }
+
+        if (event.sessionId) {
+          return this.revokeSessionAsync(event.sessionId, event, options);
+        }
+
+        return this.revokeAllUserSessionsAsync(event.userId, event, undefined, options);
+      }
+
+      case 'manual_admin_revocation': {
+        if (event.sessionId) {
+          return this.revokeSessionAsync(event.sessionId, event, options);
+        }
+        return this.revokeAllUserSessionsAsync(event.userId, event, undefined, options);
+      }
+
+      case 'stale_session_timeout': {
+        if (event.sessionId) {
+          return this.revokeSessionAsync(event.sessionId, event, options);
+        }
+        const pruneResult = await this.pruneStaleSessions();
+        if (pruneResult.ok) {
+          return ok({
+            success: true,
+            eventType: 'stale_session_timeout',
+            userId: event.userId,
+            revokedSessionIds: pruneResult.value.revokedSessionIds,
+            revokedDeviceIds: pruneResult.value.revokedDeviceIds,
+            timestamp: new Date(),
+            reason: event.reason,
+          });
+        }
+        return err(pruneResult.code);
+      }
+
+      default:
+        return err('invalid_security_event');
+    }
+  }
+
   private async performRevocation(
     sessionId: string,
     event: SecurityEvent,
@@ -156,6 +262,12 @@ export class RevocationHandler {
   ): Promise<RevocationReport> {
     const options = { ...this.options, ...opts };
     const maxRetries = options.maxRetries ?? 3;
+    const nonRetryable: SessionErrorCode[] = [
+      'session_not_found',
+      'device_not_found',
+      'unauthorized',
+      'invalid_security_event',
+    ];
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const result = sessionManager.revokeSession(sessionId, event);
@@ -163,6 +275,13 @@ export class RevocationHandler {
       if (result.ok) {
         this.recordSuccess(sessionId);
         return result.value;
+      }
+
+      if (nonRetryable.includes(result.code)) {
+        throw {
+          code: result.code,
+          message: `Revocation failed: ${result.code}`,
+        };
       }
 
       if (attempt < maxRetries) {
