@@ -55,7 +55,37 @@ export class StaleProjectionDetector {
         typeof entry.cachedAt === "string"
           ? new Date(entry.cachedAt).getTime()
           : entry.cachedAt;
-      const ageMs = Math.max(0, nowMs - cachedAtMs);
+      // An unreadable timestamp gives a NaN age, and `NaN > ttl` is false, so
+      // the entry used to pass as fresh forever. Its age is unknown, so it is
+      // treated as expired instead (#359).
+      const unreadable = !Number.isFinite(cachedAtMs);
+      const ageMs = unreadable ? 0 : Math.max(0, nowMs - cachedAtMs);
+
+      if (unreadable) {
+        staleCachesCount += 1;
+        const findingId = `stale-cache-ttl-${entry.key}`;
+        findings.push({
+          id: findingId,
+          kind: "cache",
+          targetKey: entry.key,
+          staleReason: "ttl_expired",
+          severity: "warning",
+          ageMs,
+          details: `Cache entry has an unreadable cachedAt (${String(entry.cachedAt)}); its age is unknown, so it is treated as expired`
+        });
+        recommendations.push({
+          id: `rec-${findingId}`,
+          targetKey: entry.key,
+          kind: "cache",
+          staleReason: "ttl_expired",
+          severity: "warning",
+          recommendedAction: "evict",
+          scope: "single",
+          operatorGuidance: `Evict key "${entry.key}": its timestamp cannot be read, so its freshness cannot be proven.`,
+          remediationPayload: { key: entry.key, action: "evict" }
+        });
+        continue;
+      }
 
       // Check TTL expiration
       if (entry.ttlMs > 0 && ageMs > entry.ttlMs) {
@@ -181,7 +211,7 @@ export class StaleProjectionDetector {
         typeof index.indexedAt === "string"
           ? new Date(index.indexedAt).getTime()
           : index.indexedAt;
-      const ageMs = Math.max(0, nowMs - indexedAtMs);
+      const ageMs = Number.isFinite(indexedAtMs) ? Math.max(0, nowMs - indexedAtMs) : 0;
 
       // Check Orphan Target in Index
       if (primarySet && !primarySet.has(index.targetId)) {
@@ -536,6 +566,12 @@ export class StaleProjectionDetector {
    * Computes exponential backoff for failed repair retries.
    */
   public static computeRepairRetryBackoffMs(attemptNumber: number, baseMs: number = 1000, maxMs: number = 30000): number {
-    return Math.min(maxMs, baseMs * Math.pow(2, attemptNumber));
+    // NaN, negative or fractional attempts used to yield NaN or sub-base
+    // delays (#359). The attempt is clamped to a whole number ≥ 0, so the
+    // delay is always within [0, maxMs] and never below `baseMs` (when baseMs ≤ maxMs).
+    const ceiling = Number.isFinite(maxMs) && maxMs > 0 ? maxMs : 0;
+    const base = Number.isFinite(baseMs) && baseMs > 0 ? baseMs : 0;
+    const attempt = Number.isNaN(attemptNumber) ? 0 : Math.max(0, Math.floor(attemptNumber));
+    return Math.min(ceiling, base * Math.pow(2, attempt));
   }
 }
