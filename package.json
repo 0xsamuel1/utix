@@ -60,7 +60,8 @@
     "verify:issues-359-368-410-411": "node --loader ./scripts/loader.mjs scripts/verify-issues-359-368-410-411.mjs",
     "verify:issues-400-403": "node --loader ./scripts/loader.mjs scripts/verify-issues-400-403.mjs",
     "verify:issues-405-413": "node --loader ./scripts/loader.mjs scripts/verify-issues-405-413.mjs",
-    "backfill": "node --loader ./scripts/loader.mjs scripts/backfill.mjs"
+    "backfill": "node --loader ./scripts/loader.mjs scripts/backfill.mjs",
+    "repair:orphans": "node --loader ./scripts/loader.mjs scripts/backfill.mjs --definition ./scripts/orphan-repair-definition.mjs"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^13.3.0",
