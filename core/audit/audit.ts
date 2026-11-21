@@ -158,6 +158,20 @@ export interface AuditEvent {
   readonly correlationId: string;
   /** The failure code when `outcome` is `denied`. */
   readonly errorCode?: string;
+  /** Optional detached Ed25519 signature over the event fields. */
+  readonly receipt?: SignedAuditReceipt;
+}
+
+export interface SignedAuditReceipt {
+  readonly schemaVersion: "1.0";
+  readonly algorithm: "Ed25519";
+  readonly signerId: string;
+  readonly signature: string;
+}
+
+export interface AuditReceiptSigner {
+  readonly signerId: string;
+  sign(payload: string): string;
 }
 
 export interface AuditStorage {
@@ -189,6 +203,7 @@ function isLabel(value: unknown): value is string {
 }
 
 export interface AuditInput {
+  id?: string;
   action: AuditAction;
   actor: AuditActor;
   scope?: AuditScope;
@@ -200,6 +215,7 @@ export interface AuditInput {
   at?: string;
   correlationId?: string;
   errorCode?: string;
+  receipt?: SignedAuditReceipt;
 }
 
 function scrubSecrets(value: string): string {
@@ -260,7 +276,14 @@ function isEvent(value: unknown): value is AuditEvent {
     typeof item.target?.id === "string" &&
     (item.outcome === "allowed" || item.outcome === "denied") &&
     typeof item.at === "string" &&
-    typeof item.correlationId === "string"
+    typeof item.correlationId === "string" &&
+    (item.receipt === undefined ||
+    (typeof item.receipt === "object" &&
+      item.receipt !== null &&
+      item.receipt.schemaVersion === "1.0" &&
+      item.receipt.algorithm === "Ed25519" &&
+      typeof item.receipt.signerId === "string" &&
+      typeof item.receipt.signature === "string"))
   );
 }
 
@@ -374,7 +397,9 @@ function toCsv(events: readonly AuditEvent[]): string {
     "errorCode",
     "before",
     "after",
-    "correlationId"
+    "correlationId",
+    "receiptSignerId",
+    "receiptSignature"
   ] as const;
 
   const escape = (value: string | number | boolean | null | undefined): string => {
@@ -397,7 +422,9 @@ function toCsv(events: readonly AuditEvent[]): string {
       event.errorCode,
       event.before ? JSON.stringify(event.before) : undefined,
       event.after ? JSON.stringify(event.after) : undefined,
-      event.correlationId
+      event.correlationId,
+      event.receipt?.signerId,
+      event.receipt?.signature
     ]
       .map(escape)
       .join(",")
@@ -458,7 +485,7 @@ export function createAuditTrail(options: AuditOptions = {}): AuditTrail {
 
       const actorId = input.actor.id ?? input.actor.kind;
       const event: AuditEvent = {
-        id: newId(),
+        id: input.id ?? newId(),
         action: input.action,
         actor: input.actor,
         actorId,
@@ -470,7 +497,8 @@ export function createAuditTrail(options: AuditOptions = {}): AuditTrail {
         after: auditContext(input.after),
         at: input.at ?? new Date(now()).toISOString(),
         correlationId: input.correlationId ?? newId(),
-        errorCode: input.errorCode
+        errorCode: input.errorCode,
+        receipt: input.receipt
       };
 
       if (!isEvent(event)) return err("invalid_audit_field");
