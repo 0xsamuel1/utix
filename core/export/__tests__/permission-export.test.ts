@@ -55,7 +55,7 @@ describe("decideField (#331)", () => {
   it("omits maintainer-only fields for a user (default onDenied)", () => {
     const policy = buildFieldPolicy(user, "own");
     expect(decideField("debugTrace", policy).action).toBe("omit");
-    expect(decideField("adminNotes", policy).action).toBe("omit"); // onDenied: mask in defaults
+    expect(decideField("internalLatencyMs", policy).action).toBe("omit");
   });
 
   it("masks fields with onDenied: mask for a user", () => {

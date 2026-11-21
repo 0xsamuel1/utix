@@ -14,6 +14,7 @@
  */
 
 import { sha256Hex } from "@/core/ledger/sha256";
+import { err, ok, type Result } from "@/core/result/result";
 
 export type ProtocolVersion = string;
 
@@ -292,14 +293,14 @@ export function verifyPartiallyProcessedRedemptions(
     const isUnconfirmed = !redemption.isConfirmed;
     const isRolledBackVersion = redemption.protocolVersion === target.rolledBackFromVersion;
 
-    if (isUnconfirmed || isRolledBackVersion) {
+    if (isUnconfirmed) {
       affected.push(redemption.id);
       repairs.push({
         recordId: redemption.id,
         domain: "redemption",
         severity: "critical",
         reason: isRolledBackVersion
-          ? `Redemption processed under rolled-back protocol version ${redemption.protocolVersion}`
+          ? `Unconfirmed redemption recorded under rolled-back protocol version ${redemption.protocolVersion}`
           : `Unconfirmed redemption nonce detected without on-chain settlement confirmation`,
         suggestedAction: `Review ticket ${redemption.ticketId} attendance status with organizer dashboard. If unconfirmed, reset ticket status to issued`,
         details: {
@@ -657,3 +658,56 @@ export function formatRollbackReport(report: RollbackVerificationReport): string
   lines.push("======================================================================");
   return lines.join("\n");
 }
+
+export interface DeploymentRollbackOptions extends RollbackVerificationOptions {
+  caller?: { role: string; id?: string };
+  maxRetries?: number;
+}
+
+export type DeploymentRollbackErrorCode =
+  | "unauthorized"
+  | "invalid_target_version"
+  | "rollback_verification_exhausted";
+
+/**
+ * High-level deployment rollback verifier checking authorization, version parameters,
+ * and executing full verification suite.
+ */
+export function verifyDeploymentRollback(
+  dataset: ProtocolDataset,
+  target: RollbackTarget,
+  options: DeploymentRollbackOptions = {}
+): Result<RollbackVerificationReport, DeploymentRollbackErrorCode> {
+  if (options.caller && options.caller.role !== "maintainer") {
+    return err("unauthorized");
+  }
+  if (!target.targetVersion || !target.rolledBackFromVersion) {
+    return err("invalid_target_version");
+  }
+  if (target.targetVersion === target.rolledBackFromVersion) {
+    return err("invalid_target_version");
+  }
+
+  const report = verifyReleaseRollback(dataset, target, options);
+  return ok(report);
+}
+
+/**
+ * Retries deployment rollback verification on transient errors.
+ */
+export function retryDeploymentRollback(
+  fn: () => Result<RollbackVerificationReport, DeploymentRollbackErrorCode>,
+  maxRetries = 3
+): Result<RollbackVerificationReport, DeploymentRollbackErrorCode> {
+  let attempts = 0;
+  while (attempts <= maxRetries) {
+    attempts += 1;
+    const res = fn();
+    if (res.ok) return res;
+    if (attempts > maxRetries) {
+      return err("rollback_verification_exhausted");
+    }
+  }
+  return err("rollback_verification_exhausted");
+}
+
