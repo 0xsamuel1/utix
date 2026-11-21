@@ -243,6 +243,33 @@ describe('RevocationHandler', () => {
   });
 
   describe('handleSecurityEvent (#402)', () => {
+    it('scopes a user stale-session event to that user', async () => {
+      const stale = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+      const device = {
+        deviceType: 'web' as const,
+        deviceName: 'Stale Browser',
+        userAgent: 'test',
+        ipAddress: '192.0.2.1',
+        lastActivity: stale,
+      };
+      const own = sessionManager.createSession(userId, device);
+      const other = sessionManager.createSession('other-user', device);
+
+      const result = await handler.handleSecurityEvent({
+        type: 'stale_session_timeout',
+        userId,
+        actor: { id: userId, role: 'user' },
+        timestamp: new Date(),
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.revokedSessionIds).toContain(own.id);
+        expect(result.value.revokedSessionIds).not.toContain(other.id);
+      }
+      expect(sessionManager.isSessionRevoked(other.id)).toBe(false);
+    });
+
     it('handles account_compromised by revoking all user sessions and invalidating tokens', async () => {
       const session2 = sessionManager.createSession(userId, {
         deviceType: 'mobile',

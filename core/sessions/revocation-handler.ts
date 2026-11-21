@@ -235,7 +235,9 @@ export class RevocationHandler {
         if (event.sessionId) {
           return this.revokeSessionAsync(event.sessionId, event, options);
         }
-        const pruneResult = await this.pruneStaleSessions();
+        const pruneResult = event.actor.role === 'user'
+          ? sessionManager.pruneStaleSessions({ actor: event.actor })
+          : await this.pruneStaleSessions();
         if (pruneResult.ok) {
           return ok({
             success: true,
