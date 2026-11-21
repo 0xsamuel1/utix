@@ -6,7 +6,7 @@
 import type { AuthContext } from "@/core/auth/middleware";
 import { hasPermission } from "@/core/auth/types";
 import { err, ok, type Result } from "@/core/result/result";
-import { redact, emitTelemetry } from "@/core/telemetry/telemetry";
+import { emitTelemetry } from "@/core/telemetry/telemetry";
 import {
   DEAD_LETTER_RECOVERY_PERMISSION,
   type WorkerFramework,
