@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { WebhookVerifier } from '../verification';
-import type { WebhookSubscriber } from '../types';
+import { createMemoryReplayProtectionStore, WebhookVerifier } from '../verification';
+import type { ReplayProtectionStore, WebhookSubscriber } from '../types';
 
 describe('Issue #355: Signed Webhook Replay-Window Enforcement', () => {
   let verifier: WebhookVerifier;
@@ -148,6 +148,54 @@ describe('Issue #355: Signed Webhook Replay-Window Enforcement', () => {
   });
 
   describe('Retry & Recovery Path', () => {
+    it('recognizes only an identical signed delivery when an idempotent retry is explicitly allowed', () => {
+      const store = createMemoryReplayProtectionStore();
+      const verifier = new WebhookVerifier({ nonceDeduplication: true }, { replayStore: store });
+      const message = verifier.createSignedMessage({ orderId: 'ord-retry' }, testSecret);
+      const now = message.signature.timestamp;
+
+      expect(verifier.verifyReplayWindow(message, testSecret, { now }).valid).toBe(true);
+      expect(verifier.verifyReplayWindow(message, testSecret, {
+        now: now + 1,
+        allowIdempotentRetry: true
+      })).toMatchObject({ valid: true, replayed: true });
+
+      const changed = { ...message, data: { orderId: 'ord-other' } };
+      expect(verifier.verifyReplayWindow(changed, testSecret, {
+        now: now + 1,
+        allowIdempotentRetry: true
+      })).toMatchObject({ valid: false, code: 'signature_verification_failed' });
+    });
+
+    it('keeps replay claims across verifier instances when backed by a durable adapter', () => {
+      const replayStore = createMemoryReplayProtectionStore();
+      const firstVerifier = new WebhookVerifier({}, { replayStore });
+      const message = firstVerifier.createSignedMessage({ id: 1 }, testSecret);
+      const now = message.signature.timestamp;
+
+      expect(firstVerifier.verifyReplayWindow(message, testSecret, { now }).valid).toBe(true);
+      const restartedVerifier = new WebhookVerifier({}, { replayStore });
+      expect(restartedVerifier.verifyReplayWindow(message, testSecret, { now: now + 1 }))
+        .toMatchObject({ valid: false, code: 'replay_attack_detected' });
+    });
+
+    it('fails closed when the replay store cannot durably claim a nonce', () => {
+      const replayStore: ReplayProtectionStore = {
+        get: () => undefined,
+        claim: () => { throw new Error('store unavailable'); },
+        removeExpired: () => 0,
+        trim: () => 0,
+        clear: () => undefined,
+        size: 0
+      };
+      const verifier = new WebhookVerifier({}, { replayStore });
+      const message = verifier.createSignedMessage({ id: 1 }, testSecret);
+
+      expect(verifier.verifyReplayWindow(message, testSecret, {
+        now: message.signature.timestamp
+      })).toMatchObject({ valid: false, code: 'replay_store_unavailable' });
+    });
+
     it('computes exponential backoff with jitter for retries', () => {
       const delay0 = verifier.computeRetryBackoffMs(0, 1000, 30000);
       const delay1 = verifier.computeRetryBackoffMs(1, 1000, 30000);

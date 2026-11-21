@@ -26,6 +26,21 @@ export interface ReplayProtectionRecord {
   timestamp: number;
   eventId: string;
   verified: boolean;
+  fingerprint?: string;
+}
+
+/** Atomic nonce claims are required for shared or durable replay protection. */
+export interface ReplayProtectionStore {
+  get(nonce: string): ReplayProtectionRecord | undefined;
+  claim(record: ReplayProtectionRecord): boolean;
+  removeExpired(cutoffTimestamp: number): number;
+  trim(maxRecords: number): number;
+  clear(): void;
+  readonly size: number;
+}
+
+export interface WebhookVerifierOptions {
+  readonly replayStore?: ReplayProtectionStore;
 }
 
 export interface WebhookSubscriber {
@@ -59,7 +74,8 @@ export type ReplayWindowErrorCode =
   | 'signature_verification_failed'
   | 'unauthorized_subscriber'
   | 'inactive_subscriber'
-  | 'unauthorized_event';
+  | 'unauthorized_event'
+  | 'replay_store_unavailable';
 
 export interface ReplayWindowOptions {
   now?: number;
@@ -74,4 +90,6 @@ export interface ReplayWindowVerificationResult {
   error?: string;
   ageSeconds?: number;
   deliveryAttempt?: number;
+  /** True when a previously verified identical delivery was safely recognized. */
+  replayed?: boolean;
 }
