@@ -1,6 +1,15 @@
 import type { DomainState } from "@/core/invariants/types";
 import type { TransferTicketParams } from "@/core/invariants/mutations";
-import type { ExplainableRiskAssessment, RiskSignal, RiskSignalExplanation, TransferRiskAssessment, TransferRiskContext, TransferRiskPolicy } from "./types";
+import type {
+  ExplainableRiskAssessment,
+  RiskExplainerActor,
+  RiskSignal,
+  RiskSignalExplanation,
+  SanitizedExplainableRiskAssessment,
+  TransferRiskAssessment,
+  TransferRiskContext,
+  TransferRiskPolicy
+} from "./types";
 
 export const DEFAULT_TRANSFER_RISK_POLICY: TransferRiskPolicy = Object.freeze({
   rapidResaleMs: 5 * 60_000,
@@ -126,3 +135,42 @@ export function explainRiskAssessment(
     policyThresholds: { reviewScore: policy.reviewScore, blockScore: policy.blockScore }
   };
 }
+
+/**
+ * Produces an explainable risk assessment with role-based access control (#461).
+ *
+ * - Privileged actors ("maintainer", "organizer", "reviewer"): receive the complete breakdown,
+ *   including per-signal weights, policy thresholds, and internal descriptions.
+ * - Unprivileged actors ("attendee", "anonymous"): receive a sanitized explanation that conveys
+ *   the outcome without leaking weight models or configurable thresholds.
+ */
+export function explainRiskAssessmentForActor(
+  assessment: TransferRiskAssessment,
+  actor: RiskExplainerActor,
+  policy: TransferRiskPolicy = DEFAULT_TRANSFER_RISK_POLICY
+): ExplainableRiskAssessment | SanitizedExplainableRiskAssessment {
+  const isPrivileged = actor.role === "maintainer" || actor.role === "organizer" || actor.role === "reviewer";
+
+  if (isPrivileged) {
+    return explainRiskAssessment(assessment, policy);
+  }
+
+  // Sanitized view for unprivileged actors
+  let sanitizedSummary: string;
+  if (assessment.disposition === "allow") {
+    sanitizedSummary = "Action permitted under standard security parameters.";
+  } else if (assessment.disposition === "review") {
+    sanitizedSummary = "Action submitted for administrative review due to elevated risk indicators.";
+  } else {
+    sanitizedSummary = "Action blocked by automated risk safety policy.";
+  }
+
+  return {
+    disposition: assessment.disposition,
+    code: assessment.code,
+    summary: sanitizedSummary,
+    signalsCount: assessment.signals.length,
+    isSanitized: true
+  };
+}
+
