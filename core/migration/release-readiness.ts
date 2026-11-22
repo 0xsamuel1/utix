@@ -319,3 +319,20 @@ export class MigrationReleaseReadinessVerifier {
     };
   }
 }
+
+/**
+ * Release gate for migrations and recovery evidence (#462).
+ *
+ * Evaluates migration definitions against schema release criteria:
+ * - Normal path: verifies contiguous plans, reversible scripts, and generates signed rollback evidence.
+ * - Failure paths: catches undocumented rollbacks, missing forward-fixes, or unapproved critical risk.
+ * - Retry paths: retries transient readiness probes with exponential backoff.
+ * - Authorization paths: enforces role-based access control (maintainer / release_manager).
+ */
+export async function verifyMigrationReleaseGate<TInput = unknown, TOutput = unknown>(
+  config: MigrationReleaseConfig<TInput, TOutput>,
+  actor: ReadinessActor
+): Promise<ReleaseReadinessReport> {
+  return MigrationReleaseReadinessVerifier.evaluateReadiness(config, actor);
+}
+
