@@ -50,3 +50,11 @@ Every entry carries a user-facing `userMessage`. It never contains hosts, status
 - **Stale cache.** `cached_read` fallbacks must be labelled. The returned `userMessage` says the data may be out of date; callers must show it.
 - **Public status recovery.** Publish a new tracker snapshot after each dependency result. Success resets the tracker to healthy and therefore clears the public degraded component on the next feed build; if a mapping is removed during recovery, the component becomes internal and disappears. Never put upstream diagnostics in the public component name.
 - **Adding a dependency.** Add the id to `DEPENDENCY_IDS` and an entry to the matrix. The matrix test fails until every id has a retry budget, a fallback and a safe message.
+
+## Recovery UX
+
+`core/dependencies/DependencyRecoveryNotice.tsx` provides an accessible
+degraded-state banner with an explicit retry action. The component disables
+retry while recovery is in progress, uses `role="status"` and exposes the
+dependency as data only for automation. Callers must pass the matrix's safe
+`userMessage`; upstream exception text and status codes must not be rendered.
