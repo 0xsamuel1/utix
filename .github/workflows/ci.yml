@@ -50,6 +50,14 @@ jobs:
       - name: Verify the independent issue backlog
         run: npm run verify:issues
 
+      - name: Verify migration compatibility and rollback readiness
+        run: |
+          npm run verify:migration-readiness
+          npm run test -- core/migration
+
+      - name: Verify permission and hidden-record contracts
+        run: npm run verify:contract
+
       - name: Lint
         run: npm run lint
 
