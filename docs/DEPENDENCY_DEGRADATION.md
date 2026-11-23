@@ -53,8 +53,15 @@ Every entry carries a user-facing `userMessage`. It never contains hosts, status
 
 ## Recovery UX
 
-`core/dependencies/DependencyRecoveryNotice.tsx` provides an accessible
-degraded-state banner with an explicit retry action. The component disables
-retry while recovery is in progress, uses `role="status"` and exposes the
-dependency as data only for automation. Callers must pass the matrix's safe
-`userMessage`; upstream exception text and status codes must not be rendered.
+`core/status/DependencyStatusBanner.tsx` is mounted by the shared app shell. It
+reads `/api/dependencies`, displays only the public component names and a
+generic fallback message if the status endpoint itself is unavailable, and
+allows users to request a fresh check. It stays hidden while all components are
+operational. The banner does not render probe errors, endpoint URLs, or status
+codes.
+
+`core/dependencies/DependencyRecoveryNotice.tsx` remains available to individual
+tools that need an action-specific retry. It disables retry while recovery is
+in progress, uses `role="status"`, and exposes the dependency as data only for
+automation. Callers must pass the matrix's safe `userMessage`; upstream
+exception text and status codes must not be rendered.
