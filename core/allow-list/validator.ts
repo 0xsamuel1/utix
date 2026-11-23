@@ -12,6 +12,7 @@
  * relax a list without touching the validation logic.
  */
 
+import { createHash } from "crypto";
 import { err, ok, type Result } from "@/core/result/result";
 import type {
   AllowListErrorCode,
@@ -188,16 +189,10 @@ export function createContentValidator(
 
 /**
  * Compute SHA-256 hash of content.
- * Uses Node.js crypto module for deterministic hashing.
+ * Uses Node.js crypto module for deterministic, cryptographically-secure hashing.
  */
 function computeHash(content: string): string {
-  // Using a simple deterministic hash for compatibility
-  // In production, use: crypto.createHash('sha256').update(content).digest('hex')
-  let hash = 5381;
-  for (let i = 0; i < content.length; i++) {
-    hash = ((hash << 5) + hash) ^ content.charCodeAt(i);
-  }
-  return Math.abs(hash).toString(16);
+  return createHash("sha256").update(content).digest("hex");
 }
 
 export const validateContent = createContentValidator();
