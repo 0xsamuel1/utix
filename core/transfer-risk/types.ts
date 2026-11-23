@@ -87,3 +87,24 @@ export interface ExplainableRiskAssessment extends TransferRiskAssessment {
     readonly blockScore: number;
   };
 }
+
+/**
+ * Explainer actor context for role-based disclosure (#461).
+ */
+export interface RiskExplainerActor {
+  readonly role: "maintainer" | "organizer" | "reviewer" | "attendee" | "anonymous";
+  readonly id?: string;
+}
+
+/**
+ * Sanitized explanation for untrusted or unprivileged callers (#461).
+ * Omits internal weights, policy thresholds, and signal telemetry.
+ */
+export interface SanitizedExplainableRiskAssessment {
+  readonly disposition: "allow" | "review" | "block";
+  readonly code: TransferRiskCode;
+  readonly summary: string;
+  readonly signalsCount: number;
+  readonly isSanitized: true;
+}
+
