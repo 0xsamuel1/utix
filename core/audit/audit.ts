@@ -121,7 +121,19 @@ export const SENSITIVE_ACTIONS = [
   /** A stale cache or index projection was repaired (or the repair was refused) (#356, #411). */
   "projection.repaired",
   /** A stale-projection repair was rolled back from its backup snapshot (#356, #411). */
-  "projection.restored"
+  "projection.restored",
+  /** A settlement dispute was opened (or opening was refused). */
+  "settlement_dispute.opened",
+  /** A settlement dispute investigation began (or was refused). */
+  "settlement_dispute.investigating",
+  /** Evidence or a private/public note was added to a settlement dispute. */
+  "settlement_dispute.evidence_added",
+  "settlement_dispute.note_added",
+  /** A settlement dispute was resolved or rejected. */
+  "settlement_dispute.resolved",
+  "settlement_dispute.rejected",
+  /** A final settlement dispute decision was reopened for further investigation. */
+  "settlement_dispute.reopened"
 ] as const;
 
 export type AuditAction = (typeof SENSITIVE_ACTIONS)[number];
